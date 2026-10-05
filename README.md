@@ -21,4 +21,4 @@ The mode SysEx version bytes are a best guess.
 
 
 
-This is "early" development of a project to get a fl midi script working well between the apc40 and fl studio similar to the novation flpads function and some other intended peruposes. The current provided layout is for insuring midi cc and sysex data are correct and mapped properly. Since I thought it may be useful as a general diagnostic tool   and the layout might be reusable I thought I would upload it to github on the offchance the layout work and mappings being confirmed are useful.
+This is "early" development of a project to get a fl midi script working well between the apc40 and fl studio similar to the novation flpads function and some other intended peruposes. The current provided layout is for insuring midi cc and sysex data are correct and mapped properly. Since I thought it may be useful as a general diagnostic tool   and the layout might be reusable I thought I would upload it to github on the offchance the layout work and mappings being confirmed are useful. At minimum the colour layout for the led test needs to be corrected.
