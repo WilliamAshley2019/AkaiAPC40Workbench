@@ -1,5 +1,5 @@
 # APC40 Workbench (v0.1)
-The LED colour layouts are currently wrong, but the LED function works, just not the right colour layout so if they don't match its not your unit its the code.
+The LED colour layouts are currently wrong, but the LED function works, just not the right colour layout so if they don't match its not your unit its the code.  Green Red Orange but appears more like Green Red Yellow in the layout. Also under light the first physical LED colour appers closer to yellow not green so the use of yellow might be confusing  the layout 3rd colour should be much more orange or peach.   led 1 physical is more yellow/green  second is fuchia red and 3 is peach orange in the layout it is a hard green red yellow.
 
 Standalone JUCE 8.0.12 app: draws the APC40 MkI from `apc40_layout.json`, lights controls from incoming MIDI,
 sends LED test patterns, and walks you through a Learn wizard that exports `apc40_map.json`.
