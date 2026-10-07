@@ -5,7 +5,7 @@ class ApcWorkbenchApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override    { return "APC40 Workbench"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
+    const juce::String getApplicationVersion() override { return "0.2.0"; }
     bool moreThanOneInstanceAllowed() override          { return false; }
 
     void initialise (const juce::String&) override      { mainWindow = std::make_unique<MainWindow> (getApplicationName()); }

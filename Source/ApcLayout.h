@@ -42,6 +42,7 @@ struct Control
 
     // runtime state
     int  value = 0;      // CC value / last note velocity
+    int  minSeen = 128, maxSeen = -1;   // CC range observed (reveals absolute vs relative encoders)
     int  ledState = 0;   // 0 off, 1 grn, 2 grn blink, 3 red, 4 red blink, 5 yel, 6 yel blink
     bool pressed = false, learned = false, mismatch = false;
 

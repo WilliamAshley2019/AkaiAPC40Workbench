@@ -1,4 +1,4 @@
-# APC40 Workbench (v0.1)
+# APC40 Workbench (v0.2)
 
 Standalone JUCE 8.0.12 app: draws the APC40 MkI from `apc40_layout.json`, lights controls from incoming MIDI,
 sends LED test patterns, and walks you through a Learn wizard that exports `apc40_map.json`.
@@ -11,10 +11,15 @@ sends LED test patterns, and walks you through a Learn wizard that exports `apc4
 ## Use
 1. Close FL Studio (Windows lets only one app hold the APC40 MIDI port).
 2. Pick MIDI In / Out (auto-selects ports containing "APC40"). Press things: they light on screen.
-3. "Send Mode SysEx" with Generic selected, then "LED Test" or click any pad/button on screen to cycle its LED colour (0-6).
+3. "Send Mode SysEx" with Generic selected, then "LED Test" or click any pad/button on screen to cycle its LED state (0-6). On the real unit state 1/2 is green, 3/4 red, 5/6 orange (odd states steady, even states blink). Bright room light washes the hardware LEDs toward pale yellow/peach.
 4. "Start Learn": follow the cyan frame. Green dot = matches the reference map, orange = differs. "Export Map..." saves the result.
 Edit `apc40_layout.json` (or rerun `make_layout.py`); a copy next to the .exe overrides the embedded one.
 
-## Honest caveats
-Layout v2 was corrected from the owner's description of the real unit. MIDI addresses are reconstructed from memory of the manual/protocol, not from a photo. The Learn wizard exists to catch what's wrong.
-The mode SysEx version bytes are a best guess.
+## v0.2 changes
+- Learn now **resumes** (only unlearned controls); "Reset Learn" starts over. Finishing auto-saves `Documents\APC40Workbench\apc40_map.json`.
+- CC/note-off spam is hidden unless "Verbose log" is ticked. Everything is also written, untrimmed, to `Documents\APC40Workbench\workbench.log`.
+- "Copy Summary" puts a compact per-control report (address, ok/differs, CC range seen) on the clipboard; "Copy Log" copies the log box.
+- "Probe" row: send any Note On / Note Off / CC to the APC40 (for ring LEDs, mode experiments).
+
+## fl_script/APC40Diag
+Stage 0 FL Studio script. Install path and setup are in the header of `device_APC40Diag.py`.

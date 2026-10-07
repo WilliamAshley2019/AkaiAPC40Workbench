@@ -73,9 +73,10 @@ private:
         if (blinking && ! blinkOn) return juce::Colour (0xff2e3036);
         switch ((s + 1) / 2)
         {
-            case 1:  return juce::Colour (0xff2ecc40);
-            case 2:  return juce::Colour (0xffff3b30);
-            default: return juce::Colour (0xffffcc00);
+            // true APC40 MkI LED tones as seen in a dark room (bright room light washes them out): green, red, orange
+            case 1:  return juce::Colour (0xff25d046);
+            case 2:  return juce::Colour (0xffff2a2a);
+            default: return juce::Colour (0xffff8c1a);
         }
     }
 

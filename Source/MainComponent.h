@@ -12,6 +12,10 @@ class MainComponent : public juce::Component,
 public:
     MainComponent()
     {
+        {
+            auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("APC40Workbench");
+            dir.createDirectory();  logFile = dir.getChildFile ("workbench.log");  logFile.deleteFile();
+        }
         loadInitialLayout();
         surface.setLayout (&layout);
         surface.onPress   = [this] (int i) { surfacePress (i); };
@@ -21,7 +25,7 @@ public:
         setupLabel (inLabel, "MIDI In");   setupLabel (outLabel, "MIDI Out");  setupLabel (modeLabel, "Mode");
         for (auto* c : { &inCombo, &outCombo, &modeCombo }) addAndMakeVisible (*c);
         modeCombo.addItem ("Generic (0x40)", 1);  modeCombo.addItem ("Ableton (0x41)", 2);  modeCombo.addItem ("Alt Ableton (0x42)", 3);
-        modeCombo.setSelectedId (1, juce::dontSendNotification);
+        modeCombo.setSelectedId (3, juce::dontSendNotification);   // 0x42: all LEDs host-controlled, nothing banked
         inCombo.onChange  = [this] { openInput  (inCombo.getSelectedItemIndex()); };
         outCombo.onChange = [this] { openOutput (outCombo.getSelectedItemIndex()); };
 
@@ -36,6 +40,18 @@ public:
         setupButton (stopBtn,    "Stop Learn",       [this] { stopWizard ("Learn stopped."); });
         setupButton (exportBtn,  "Export Map...",    [this] { exportMap(); });
         setupButton (loadBtn,    "Load Layout...",   [this] { loadLayoutFile(); });
+        setupButton (resetBtn,   "Reset Learn",      [this] { resetLearn(); });
+        setupButton (copyLogBtn, "Copy Log",         [this] { juce::SystemClipboard::copyTextToClipboard (logBox.getText()); log ("Log copied to clipboard."); });
+        setupButton (copySumBtn, "Copy Summary",     [this] { juce::SystemClipboard::copyTextToClipboard (buildSummaryText()); log ("Summary copied to clipboard."); });
+        setupButton (probeBtn,   "Send",             [this] { sendProbe(); });
+        verboseToggle.setButtonText ("Verbose log (CC + note off)");
+        verboseToggle.setColour (juce::ToggleButton::textColourId, juce::Colour (0xffb0b4bd));
+        addAndMakeVisible (verboseToggle);
+        setupLabel (probeLabel, "Probe:");
+        probeType.addItem ("Note On", 1);  probeType.addItem ("Note Off", 2);  probeType.addItem ("CC", 3);
+        probeType.setSelectedId (3, juce::dontSendNotification);  addAndMakeVisible (probeType);
+        for (auto* e : { &probeCh, &probeNum, &probeVal }) { e->setInputRestrictions (3, "0123456789");  addAndMakeVisible (*e); }
+        probeCh.setText ("1");  probeNum.setText ("56");  probeVal.setText ("2");   // CC 56 = track knob 1 ring type (2 = volume style)
 
         status.setFont (juce::FontOptions (16.0f));
         status.setColour (juce::Label::textColourId, juce::Colours::white);
@@ -68,8 +84,16 @@ public:
         modeBtn.setBounds (row1.removeFromLeft (130));
         a.removeFromTop (6);
         auto row2 = a.removeFromTop (28);
-        for (auto* b : { &ledTestBtn, &ledOffBtn, &wizBtn, &backBtn, &skipBtn, &skipGrpBtn, &stopBtn, &exportBtn, &loadBtn })
-            b->setBounds (row2.removeFromLeft (112).reduced (2, 0));
+        for (auto* b : { &ledTestBtn, &ledOffBtn, &wizBtn, &backBtn, &skipBtn, &skipGrpBtn, &stopBtn, &resetBtn, &exportBtn, &loadBtn, &copyLogBtn, &copySumBtn })
+            b->setBounds (row2.removeFromLeft (104).reduced (2, 0));
+        a.removeFromTop (6);
+        auto row3 = a.removeFromTop (26);
+        verboseToggle.setBounds (row3.removeFromLeft (220));  row3.removeFromLeft (20);
+        probeLabel.setBounds (row3.removeFromLeft (52));      probeType.setBounds (row3.removeFromLeft (100));  row3.removeFromLeft (6);
+        probeCh.setBounds (row3.removeFromLeft (44));  row3.removeFromLeft (4);
+        probeNum.setBounds (row3.removeFromLeft (44)); row3.removeFromLeft (4);
+        probeVal.setBounds (row3.removeFromLeft (44)); row3.removeFromLeft (6);
+        probeBtn.setBounds (row3.removeFromLeft (70));
         a.removeFromTop (6);
         status.setBounds (a.removeFromTop (26));
         a.removeFromTop (4);
@@ -83,7 +107,13 @@ private:
     ApcSurface surface;
     juce::Label inLabel, outLabel, modeLabel, status;
     juce::ComboBox inCombo, outCombo, modeCombo;
-    juce::TextButton rescanBtn, modeBtn, ledTestBtn, ledOffBtn, wizBtn, backBtn, skipBtn, skipGrpBtn, stopBtn, exportBtn, loadBtn;
+    juce::TextButton rescanBtn, modeBtn, ledTestBtn, ledOffBtn, wizBtn, backBtn, skipBtn, skipGrpBtn, stopBtn, exportBtn, loadBtn,
+                     resetBtn, copyLogBtn, copySumBtn, probeBtn;
+    juce::ToggleButton verboseToggle;
+    juce::ComboBox probeType;
+    juce::TextEditor probeCh, probeNum, probeVal;
+    juce::Label probeLabel;
+    juce::File logFile;
     juce::TextEditor logBox;
     std::unique_ptr<juce::FileChooser> chooser;
 
@@ -112,8 +142,9 @@ private:
     }
     void log (const juce::String& s)
     {
-        if (logBox.getTotalNumChars() > 30000) logBox.setText (logBox.getText().substring (15000), false);
+        if (logBox.getTotalNumChars() > 150000) logBox.setText (logBox.getText().substring (75000), false);
         logBox.moveCaretToEnd();  logBox.insertTextAtCaret (s + "\n");
+        logFile.appendText (s + "\n");   // full, untrimmed copy: Documents/APC40Workbench/workbench.log
     }
 
     // ---------------------------------------------------------------- layout
@@ -233,7 +264,8 @@ private:
         {
             const bool on = m.isNoteOn();
             const int ch = m.getChannel(), num = m.getNoteNumber();
-            log (juce::String (on ? "NOTE ON  " : "NOTE OFF ") + "ch" + juce::String (ch) + " #" + juce::String (num) + " v" + juce::String ((int) m.getVelocity()));
+            if (on || verboseToggle.getToggleState())
+                log (juce::String (on ? "NOTE ON  " : "NOTE OFF ") + "ch" + juce::String (ch) + " #" + juce::String (num) + " v" + juce::String ((int) m.getVelocity()));
             const int i = layout.find (apc::Msg::Note, ch, num);
             if (i >= 0) { auto& c = layout.controls[(size_t) i]; c.pressed = on; if (on) c.value = m.getVelocity(); }
             if (on) learn (apc::Msg::Note, ch, num);
@@ -241,9 +273,10 @@ private:
         else if (m.isController())
         {
             const int ch = m.getChannel(), num = m.getControllerNumber(), val = m.getControllerValue();
-            log ("CC       ch" + juce::String (ch) + " #" + juce::String (num) + " = " + juce::String (val));
+            if (verboseToggle.getToggleState())
+                log ("CC       ch" + juce::String (ch) + " #" + juce::String (num) + " = " + juce::String (val));
             const int i = layout.find (apc::Msg::CC, ch, num);
-            if (i >= 0) layout.controls[(size_t) i].value = val;
+            if (i >= 0) { auto& c = layout.controls[(size_t) i]; c.value = val; c.minSeen = juce::jmin (c.minSeen, val); c.maxSeen = juce::jmax (c.maxSeen, val); }
             learn (apc::Msg::CC, ch, num);
         }
         else log ("MIDI " + m.getDescription());
@@ -259,11 +292,13 @@ private:
         {
             auto& c = layout.controls[i];
             if (c.kind == apc::Kind::Text || c.kind == apc::Kind::Panel || c.expMsg == apc::Msg::None) continue;
+            if (c.learned) continue;   // resume: keep what was already learned
             c.msg = c.expMsg;  c.ch = c.expCh;  c.num = c.expNum;  c.learned = false;  c.mismatch = false;
             wizOrder.push_back ((int) i);
         }
+        if (wizOrder.empty()) { log ("Everything is already learned. Use Reset Learn to start over, or Export Map / Copy Summary."); return; }
         wizPos = 0;  wizardActive = true;  ignoreUntil = 0;
-        log ("Learn started: " + juce::String ((int) wizOrder.size()) + " controls.");
+        log ("Learn started/resumed: " + juce::String ((int) wizOrder.size()) + " controls left.");
         updateWizardStatus();
     }
     void stopWizard (const juce::String& msg)
@@ -273,6 +308,7 @@ private:
         for (auto& c : layout.controls) { if (c.learned) ++learned; if (c.learned && c.mismatch) ++diffs; }
         status.setText (msg + "  Learned " + juce::String (learned) + ", differing from reference: " + juce::String (diffs) + ".", juce::dontSendNotification);
         log (status.getText());
+        if (msg.startsWith ("Learn finished")) autoSaveMap();
     }
     void updateWizardStatus()
     {
@@ -321,6 +357,47 @@ private:
         updateWizardStatus();
     }
 
+    // ---------------------------------------------------------------- extras
+    void resetLearn()
+    {
+        wizardActive = false;  surface.setTarget (-1);
+        for (auto& c : layout.controls)
+        { c.msg = c.expMsg;  c.ch = c.expCh;  c.num = c.expNum;  c.learned = false;  c.mismatch = false;  c.minSeen = 128;  c.maxSeen = -1; }
+        status.setText ("Learn reset. Click Start Learn.", juce::dontSendNotification);
+        log ("Learn reset.");  surface.repaint();
+    }
+    void autoSaveMap()
+    {
+        auto f = logFile.getParentDirectory().getChildFile ("apc40_map.json");
+        if (f.replaceWithText (buildMapJson())) log ("Auto-saved map: " + f.getFullPathName());
+    }
+    juce::String buildSummaryText() const
+    {
+        juce::String body;  int ok = 0, diff = 0, un = 0;
+        for (auto& c : layout.controls)
+        {
+            if (! c.hasMidi()) continue;
+            if (! c.learned) ++un;  else if (c.mismatch) ++diff;  else ++ok;
+            body << c.id << " | " << c.addressText() << " | "
+                 << (! c.learned ? juce::String ("unlearned") : c.mismatch ? "DIFFERS (ref " + c.expectedText() + ")" : juce::String ("ok"));
+            if (c.msg == apc::Msg::CC && c.maxSeen >= c.minSeen) body << " | seen " << c.minSeen << ".." << c.maxSeen;
+            body << "\n";
+        }
+        return "APC40 summary: " + juce::String (ok) + " ok, " + juce::String (diff) + " differ, " + juce::String (un) + " unlearned\n" + body;
+    }
+    void sendProbe()
+    {
+        if (! midiOut) { log ("No MIDI out selected."); return; }
+        const int ch  = juce::jlimit (1, 16, probeCh.getText().getIntValue());
+        const int num = juce::jlimit (0, 127, probeNum.getText().getIntValue());
+        const int val = juce::jlimit (0, 127, probeVal.getText().getIntValue());
+        const int t = probeType.getSelectedId();
+        midiOut->sendMessageNow (t == 1 ? juce::MidiMessage::noteOn  (ch, num, (juce::uint8) val)
+                               : t == 2 ? juce::MidiMessage::noteOff (ch, num, (juce::uint8) val)
+                                        : juce::MidiMessage::controllerEvent (ch, num, val));
+        log ("Probe sent: " + probeType.getText() + " ch" + juce::String (ch) + " #" + juce::String (num) + " v" + juce::String (val));
+    }
+
     // ---------------------------------------------------------------- export
     juce::String buildMapJson() const
     {
@@ -335,6 +412,7 @@ private:
             o->setProperty ("id", c.id);  o->setProperty ("group", c.group);
             o->setProperty ("type", apc::toString (c.msg));  o->setProperty ("channel", c.ch);  o->setProperty ("number", c.num);
             o->setProperty ("learned", c.learned);  o->setProperty ("matches_reference", ! c.mismatch);
+            if (c.msg == apc::Msg::CC && c.maxSeen >= c.minSeen) { o->setProperty ("min_seen", c.minSeen);  o->setProperty ("max_seen", c.maxSeen); }
             if (c.mismatch)
             {
                 o->setProperty ("reference_type", apc::toString (c.expMsg));

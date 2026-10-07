@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates apc40_layout.json (design space 1000 x 620). v2 - corrected from the owner's description of the real unit."""
+"""Generates apc40_layout.json (design space 1000 x 620). v2 """
 import json, sys
 W, H = 1000, 620
 C = []
