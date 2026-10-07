@@ -12,7 +12,9 @@
 #          press = select that slot.  Track knobs = params 1-8, device knobs = params 9-16, faders 1-8 = params 17-24 (24 per bank)
 #          SCENE 1/2 = param bank -/+,  SCENE 3/4 = prev/next preset,  SCENE 5 = dump params to Script output
 #          bank UP/DOWN = previous/next slot, bank LEFT/RIGHT = +/- 8 tracks, CUE LEVEL (relative) = scroll param bank
-#          LEDs: green = plugin present, orange = selected plugin, red = selected empty slot, single-colour rows blink the selection
+#          LEDs (grid rows 1-5): colour = effect type  GREEN tone/EQ/filter/stereo, RED dynamics/distortion, ORANGE time/space/modulation
+#               selected slot BLINKS in its colour (red blink = selected empty slot); rows 6-10 are single colour: on = plugin, blink = selected
+#          SHIFT held while turning a knob = fine adjust (quarter speed).  Pressing a pad also tries to open/focus that plugin's window.
 #          knob rings follow plugin parameters (no jump); faders use pickup (they have no feedback)
 #
 # Install: Documents\Image-Line\FL Studio\Settings\Hardware\APC40Control\device_APC40Control.py
@@ -34,6 +36,10 @@ NUM_SLOTS = 10
 BANK_SIZE = 24              # params per page: 8 track knobs + 8 device knobs + 8 faders
 PICKUP_TOLERANCE = 0.04
 CUE_TICKS_PER_BANK = 4
+FOCUS_ON_SELECT = True      # try to bring the plugin window to the front when a slot is selected
+FINE_SCALE = 0.25           # SHIFT + knob moves the parameter at this fraction of normal range
+TOUCH_HOLD_SECONDS = 0.6    # while a knob is being turned, do not write ring positions back to it (stops fighting/jitter)
+RING_MIN_DELTA = 2          # background ring sync ignores differences smaller than this (0-127 counts)
 BLINK_SECONDS = 0.4
 SCAN_SECONDS = 0.25
 POLL_SECONDS = 0.10
@@ -53,6 +59,17 @@ DEVICE_KNOB_CC = list(range(16, 24))
 CC_FADER, CC_MASTER, CC_CUE = 7, 14, 47
 RING_TYPE_TRACK = list(range(56, 64))
 RING_TYPE_DEVICE = list(range(24, 32))
+
+# Effect-type colours for the grid. First matching keyword wins; anything unmatched is 0 (green, tone shaping).
+# 0 = green (tone: EQ, filters, stereo, balance)   1 = red (dynamics, distortion)   2 = orange (time, space, modulation)
+CATEGORY_KEYWORDS = [
+    (1, ("limiter", "compress", "maximus", "gate", "transient", "clipper", "squeeze", "multiband", "expander", "dynamics",
+         "de-ess", "deess", "leveler", "levelling", "distort", "overdrive", "saturat", "waveshap", "bitcrush", "crusher",
+         "fuzz", "tube", "blood", "soundgoodizer", "tape")),
+    (2, ("reverb", "reeverb", "delay", "echo", "convolv", "luxeverb", "chorus", "flang", "phaser", "tremolo", "vibrato",
+         "vocoder", "gross beat", "granul", "pitcher", "emphasis", "wobble", "autopan", "spatial", "hall", "plate", "space")),
+]
+CATEGORY_VEL = {0: 1, 1: 3, 2: 5}       # steady LED state per category (blink = +1)
 
 LED_OFF, LED_GREEN, LED_GREEN_BLINK, LED_RED, LED_RED_BLINK, LED_ORANGE, LED_ORANGE_BLINK = 0, 1, 2, 3, 4, 5, 6
 RING_OFF, RING_SINGLE, RING_VOLUME, RING_PAN = 0, 1, 2, 3
@@ -81,6 +98,12 @@ class App:
         self.fader_armed = [False] * 9
         self.cue_accum = 0
         self.last_fl_track = None
+        self.clock = time.time
+        self.touched = {}                   # knob cc -> last time it moved
+        self.fine = {}                      # knob cc -> (knob value at start, parameter value at start) while SHIFT is held
+        self.cat = {}                       # (track, slot) -> effect category 0/1/2
+        self.focus_fn = None                # which FL call worked for opening a plugin window
+        self.focus_warned = False
 
     # ------------------------------------------------------------ output (diffed: only changes hit the USB port)
     def led(self, ch, note, vel):
@@ -121,7 +144,48 @@ class App:
                 if self.present.get(key) != now:
                     self.present[key] = now
                     changed = True
+                if now and key not in self.cat:
+                    self.cat[key] = self.category(*key)
+                elif not now:
+                    self.cat.pop(key, None)
         return changed
+
+    @staticmethod
+    def category(track, slot):
+        try:
+            name = plugins.getPluginName(track, slot).lower()
+        except Exception:                                   # noqa: BLE001
+            return 0
+        for cat, words in CATEGORY_KEYWORDS:
+            if any(w in name for w in words):
+                return cat
+        return 0
+
+    def focus_plugin(self):
+        if not (FOCUS_ON_SELECT and self.sel_present()):
+            return
+        candidates = [("mixer", mixer, "focusEditor"), ("mixer", mixer, "showEditor"), ("plugins", plugins, "showEditor"),
+                      ("plugins", plugins, "focusEditor")]
+        if self.focus_fn:
+            candidates = [c for c in candidates if c[0] + "." + c[2] == self.focus_fn]
+        for modname, module, attr in candidates:
+            fn = getattr(module, attr, None)
+            if fn is None:
+                continue
+            try:
+                fn(self.sel_track, self.sel_slot)
+                if not self.focus_fn:
+                    self.focus_fn = modname + "." + attr
+                    print("APC40: plugin window focus via", self.focus_fn)
+                return
+            except Exception as e:                          # noqa: BLE001
+                print("APC40: %s.%s failed: %s" % (modname, attr, e))
+        if not self.focus_warned:
+            self.focus_warned = True
+            names = []
+            for mod in (mixer, plugins, ui):
+                names += [mod.__name__ + "." + n for n in dir(mod) if any(k in n.lower() for k in ("editor", "focus", "window"))]
+            print("APC40: no working plugin-window function found. Candidates in this FL build:", ", ".join(sorted(names)))
 
     def sel_present(self):
         return self.slot_present(self.sel_track, self.sel_slot)
@@ -164,7 +228,7 @@ class App:
                 print("APC40: select track error:", e)
 
     # ------------------------------------------------------------ rendering
-    def render(self):
+    def render(self, force_rings=False):
         want = {}
         want[(0, N_PAN)] = 1 if self.mode == "mixer" else 0
         want[(0, N_SEND_A)] = 1 if self.mode == "fx" else 0
@@ -175,7 +239,7 @@ class App:
         for ch, note in ALL_LED_KEYS:
             self.led(ch, note, want.get((ch, note), 0))
         self.render_ring_types()
-        self.sync_rings()
+        self.sync_rings(force_rings)
 
     def render_fx(self, want):
         for col in range(NUM_COLS):
@@ -184,8 +248,9 @@ class App:
                 note = FX_ROW_NOTES[row]
                 present = self.present.get((track, row), False)
                 selected = (track == self.sel_track and row == self.sel_slot)
-                if row < 5:                                   # three-colour clip-launch rows
-                    vel = (LED_ORANGE if present else LED_RED) if selected else (LED_GREEN if present else LED_OFF)
+                if row < 5:                                   # three-colour rows: colour = effect type, blink = selected
+                    steady = CATEGORY_VEL[self.cat.get((track, row), 0)]
+                    vel = (steady + 1 if present else LED_RED_BLINK) if selected else (steady if present else LED_OFF)
                 elif selected:                                # single-colour rows: blink the cursor
                     vel = 2 if row == 5 else (1 if self.blink_on else 0)
                 else:
@@ -219,15 +284,23 @@ class App:
             self.cc_sent[key] = value
             send_midi(0xB0, cc, value)
 
-    def sync_rings(self):
+    def sync_rings(self, force=False):
+        now = self.clock()
         if self.mode == "fx":
             for k in range(16):
                 cc = TRACK_KNOB_CC[k] if k < 8 else DEVICE_KNOB_CC[k - 8]
+                if not force and now - self.touched.get(cc, -99.0) < TOUCH_HOLD_SECONDS:
+                    continue                                # the user is turning this knob: do not fight them
                 p = self.bank * BANK_SIZE + k
                 v = self.param_value(p) if (self.sel_present() and p < self.pcount) else 0.0
-                self.ring(cc, (v or 0.0) * 127)
+                target = int(round(max(0.0, min(1.0, v or 0.0)) * 127))
+                if not force and abs(target - self.cc_sent.get(cc, -99)) < RING_MIN_DELTA:
+                    continue
+                self.ring(cc, target)
         else:
             for i in range(8):
+                if not force and now - self.touched.get(TRACK_KNOB_CC[i], -99.0) < TOUCH_HOLD_SECONDS:
+                    continue
                 try:
                     pan = mixer.getTrackPan(self.track_of(i))
                 except Exception:                           # noqa: BLE001
@@ -251,6 +324,9 @@ class App:
     def on_button(self, ch, note, down):
         if note == N_SHIFT:
             self.shift = down
+            if not down and self.fine:
+                self.fine.clear()
+                self.sync_rings(True)                       # knobs go back to showing the true parameter values
             return
         if not down:
             return
@@ -275,7 +351,7 @@ class App:
         self.led_sent.clear()                               # force a full, clean repaint of the surface
         self.scan_present()
         self.refresh_selected()
-        self.render()
+        self.render(True)
 
     def shift_tracks(self, delta):
         self.base = max(1, self.base + delta)
@@ -284,7 +360,7 @@ class App:
         if not (self.base <= self.sel_track < self.base + NUM_COLS):
             self.select_track(self.base)
             self.refresh_selected()
-        self.render()
+        self.render(True)
 
     def fx_button(self, ch, note):
         if note in NOTE_TO_FX_ROW and ch < NUM_COLS:
@@ -294,6 +370,7 @@ class App:
             self.refresh_selected()
             self.rearm_faders()
             self.hint("Track %d  Slot %d: %s" % (self.sel_track, self.sel_slot + 1, self.pname or "(empty)"))
+            self.focus_plugin()
         elif note == SCENE_NOTES[0]:
             self.change_bank(-1)
         elif note == SCENE_NOTES[1]:
@@ -309,9 +386,10 @@ class App:
             self.bank = 0
             self.refresh_selected()
             self.rearm_faders()
+            self.focus_plugin()
         else:
             return
-        self.render()
+        self.render(True)
 
     def change_bank(self, delta):
         nb = max(0, min(self.max_bank(), self.bank + delta))
@@ -319,6 +397,7 @@ class App:
             self.bank = nb
             self.rearm_faders()
             self.hint("%s: parameter page %d/%d" % (self.pname, self.bank + 1, self.max_bank() + 1))
+            self.sync_rings(True)
 
     def dump_params(self):
         if not self.sel_present():
@@ -373,11 +452,21 @@ class App:
         self.render()
 
     def knob(self, k, value, cc):                          # k 0-7 track knobs, 8-15 device knobs
+        self.touched[cc] = self.clock()
         if self.mode == "fx":
             p = self.bank * BANK_SIZE + k
             if self.sel_present() and p < self.pcount:
-                self.set_param(p, value / 127.0)
-                self.cc_sent[cc] = value                   # the ring already shows the value the knob just sent
+                if self.shift:                             # fine adjust: move relative to where the knob/param were when SHIFT engaged
+                    if cc not in self.fine:
+                        self.fine[cc] = (value, self.param_value(p) or 0.0)
+                    k0, p0 = self.fine[cc]
+                    self.set_param(p, max(0.0, min(1.0, p0 + (value - k0) / 127.0 * FINE_SCALE)))
+                else:
+                    self.set_param(p, value / 127.0)
+                if self.shift:
+                    self.cc_sent.pop(cc, None)             # fine mode: the knob no longer equals the parameter, resync on release
+                else:
+                    self.cc_sent[cc] = value               # the ring already shows the value the knob just sent
                 try:
                     self.hint("%s  %s: %s" % (self.pname, plugins.getParamName(p, self.sel_track, self.sel_slot),
                                               plugins.getParamValueString(p, self.sel_track, self.sel_slot)))
