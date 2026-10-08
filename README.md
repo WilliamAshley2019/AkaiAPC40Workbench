@@ -6,6 +6,12 @@
 
 # FL Studio Script 
 Currenly the script has mixer, fxs and plugin control, and some channel rack functions. [⬇️ Download APC40 Py MIDI SCRIPT](https://github.com/WilliamAshley2019/AkaiAPC40Workbench/blob/main/device_APC40Control.py?download=) I would still like to add playlist functions and use for real time arrangement. TODO Also I need to figure out how api loop clone and other functions work.
+Added inutitive channel rack 3 stage process.
+in send B mode it is channel rack interface top level is channel rack pads to channel so each pad is a channel red is muted green is active
+if you press the pad then press master it goes to channel sequencer mode you then can place notes to your heart content
+the scene launch buttons are channel length that is active per page
+
+
  
 # APC40 Workbench (v0.2)
 App can be downloaded for windows here
