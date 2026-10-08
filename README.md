@@ -1,6 +1,6 @@
 [![Download APC40 Workbench](https://img.shields.io/badge/Download-APC40%20Workbench-blue?logo=github)](https://github.com/WilliamAshley2019/AkaiAPC40Workbench/raw/refs/heads/main/APC40%20Workbench.exe)
 
-[![Download FL Studio Script](https://img.shields.io/badge/Download-APC40%20Workbench-blue?logo=github)] (https://github.com/WilliamAshley2019/AkaiAPC40Workbench/raw/refs/heads/main/device_APC40Control.py))
+[![Download FL Studio Script](https://img.shields.io/badge/Download-APC40%20Workbench-blue?logo=github)](https://github.com/WilliamAshley2019/AkaiAPC40Workbench/raw/refs/heads/main/device_APC40Control.py)
 
 
 
