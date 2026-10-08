@@ -5,7 +5,8 @@
 
 
 # FL Studio Script 
-Currenly the script has mixer, fxs and plugin control, and some channel rack functions. I would still like to add playlist functions and use for real time arrangement. TODO Also I need to figure out how api loop clone and other functions work.
+Currenly the script has mixer, fxs and plugin control, and some channel rack functions. https://github.com/WilliamAshley2019/AkaiAPC40Workbench/blob/main/device_APC40Control.py?download=
+I would still like to add playlist functions and use for real time arrangement. TODO Also I need to figure out how api loop clone and other functions work.
  
 # APC40 Workbench (v0.2)
 App can be downloaded for windows here
