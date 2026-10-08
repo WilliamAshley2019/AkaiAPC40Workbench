@@ -12,6 +12,17 @@ if you press the pad then press master it goes to channel sequencer mode you the
 the scene launch buttons are channel length that is active per page
 
 shift + pad  mute or unmutes that. 
+
+There are three levels to the channel rack
+Level 1 Channel select and enable/mute
+Level 2 Channel sequencer  (scene launch channges pattern size per page 8 16 32 64 128)
+Level 3 Is per note edit for the graphic editor functions of channel rack channel sequences.
+
+Cue/level knob allows fast select, while each pad represents the value at the leve.
+
+The master button zooms through levels based on what is selected.
+
+Slider and knobs still need to be refined at the channel level, still a little buggy but a little progress on the script.
  
 # APC40 Workbench (v0.2)
 App can be downloaded for windows here
