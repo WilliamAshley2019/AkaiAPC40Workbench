@@ -4,7 +4,8 @@ https://github.com/WilliamAshley2019/AkaiAPC40Workbench/blob/main/device_APC40Co
 Currenly the script has mixer, fxs and plugin control, and some channel rack functions. I would still like to add playlist functions and use for real time arrangement. TODO Also I need to figure out how api loop clone and other functions work.
 
 # APC40 Workbench (v0.2)
-App can be downloaded for windws here https://github.com/WilliamAshley2019/AkaiAPC40Workbench/blob/main/APC40%20Workbench.exe
+App can be downloaded for windws here
+[Download EXE](https://github.com/WilliamAshley2019/AkaiAPC40Workbench/blob/main/APC40%20Workbench.exe)
 The workbench - diagnostic program is for helping with mapping and may serve as a virtual midi device in the future for some reasons like "sharing" the hardware device virtually to pass midi data /controls across mutliple applications, not yet implemented.
 
 The LED colour layout is still not final: green/red/orange may read more like green/red/yellow in the current code, and the first physical LED may look more yellow/green than expected. If the colours look off, it is likely the current layout rather than the hardware; the LED colours still need to be corrected.
