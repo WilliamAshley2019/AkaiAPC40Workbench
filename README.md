@@ -1,10 +1,10 @@
 [![Download APC40 Workbench](https://img.shields.io/badge/Download-APC40%20Workbench-blue?logo=github)](https://github.com/WilliamAshley2019/AkaiAPC40Workbench/raw/refs/heads/main/APC40%20Workbench.exe)
 
-[![Download FL Studio Script](https://img.shields.io/badge/Download-APC40%20FLSTUDIOMIDISCRIPT-blue?logo=github)](https://github.com/WilliamAshley2019/AkaiAPC40Workbench/releases/latest/download/device_APC40Control.py)
+[![Download FL Studio Script](https://img.shields.io/badge/Download-APC40%20FLSTUDIOMIDISCRIPT-blue?logo=github)](https://github.com/WilliamAshley2019/AkaiAPC40Workbench/raw/refs/heads/main/device_APC40Control.py)
 
 
 
-# FL Studio Script [⬇️ Download APC40 Py MIDI Script](https://github.com/WilliamAshley2019/AkaiAPC40Workbench/releases/latest/download/device_APC40Control.py)
+# FL Studio Script 
 Currenly the script has mixer, fxs and plugin control, and some channel rack functions. I would still like to add playlist functions and use for real time arrangement. TODO Also I need to figure out how api loop clone and other functions work.
  
 # APC40 Workbench (v0.2)
