@@ -1,4 +1,4 @@
-#FLSCript
+# FL Studio Script
 Currenly the script has mixer, fxs and plugin control, and some channel rack functions. I would still like to add playlist functions and use for real time arrangement. TODO Also I need to figure out how api loop clone and other functions work.
 
 # APC40 Workbench (v0.2)
