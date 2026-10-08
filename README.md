@@ -1,3 +1,6 @@
+#FLSCript
+Currenly the script has mixer, fxs and plugin control, and some channel rack functions. I would still like to add playlist functions and use for real time arrangement. TODO Also I need to figure out how api loop clone and other functions work.
+
 # APC40 Workbench (v0.2)
 
 The LED colour layout is still not final: green/red/orange may read more like green/red/yellow in the current code, and the first physical LED may look more yellow/green than expected. If the colours look off, it is likely the current layout rather than the hardware; the LED colours still need to be corrected.
