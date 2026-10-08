@@ -1,12 +1,11 @@
 # name=APC40 MkI Control (Mixer + FX + Channel Rack)
 # supportedDevices=APC40
 #
-# Akai APC40 MkI (original) control script for FL Studio 2026.1.7+.   v0.2
+# Akai APC40 MkI (original) control script for FL Studio 2026.1.7+.   v0.7
 # Addresses come from the Workbench Learn run (137/137 matched) - see docs/APC40_PROTOCOL_NOTES.md.
-# Only FL API calls verified in the IL-Group API stubs are used (plugins.*, mixer track functions, mixer.setActiveTrack,
-# channels.* for Channel Rack mode).
+# Only FL API calls verified in the IL-Group API stubs are used (plugins.*, mixer track functions, mixer.setActiveTrack).
 #
-# MODES  (PAN = Mixer, SEND A = FX, SEND B = Channel Rack; SHIFT + MASTER toggles between Mixer/FX)
+# MODES  (PAN = Mixer, SEND A = FX, SEND B = Channel Rack; SHIFT + MASTER SELECT cycles modes)
 #   MIXER: faders = track volume, ACTIVATOR = mute, SOLO/CUE = solo, REC = arm, TRACK SELECT = select,
 #          track knobs = pan (rings follow), master fader = master volume, bank LEFT/RIGHT = +/- 8 tracks
 #   FX:    the 8x10 matrix = 8 mixer tracks x 10 effect slots (rows: 5 clip rows, clip stop, activator, solo, rec, track select)
@@ -17,13 +16,18 @@
 #               selected slot BLINKS in its colour (red blink = selected empty slot); rows 6-10 are single colour: on = plugin, blink = selected
 #          SHIFT held while turning a knob = fine adjust (quarter speed).  Pressing a pad also tries to open/focus that plugin's window.
 #          knob rings follow plugin parameters (no jump); faders use pickup (they have no feedback)
-#   CHANNELS (Send B): rows 1-5 = step sequencer for 5 channels x 8 steps per page.
-#          Press pads to toggle steps.  Row 6 = select channel, Row 7 = mute, Row 8 = solo, Row 9 = arm,
-#          Row 10 = jump to step page.  Bank LEFT/RIGHT = step page scroll.  CUE LEVEL = step page scroll.
-#          Track knobs = velocity for steps 1-8 (where supported), Device knobs = steps 9-16.
-#          Faders = step pan (where supported).  Master fader = selected channel volume.
-#          SCENE 1/2/3 = Fill Each 2/4/8, SCENE 4/5 = Rotate L/R, SCENE 6 = Clone Loop, SCENE 7 = Clear Steps,
-#          SCENE 8 = Toggle 5ch/8ch view.  Stop All = clear all steps in pattern.
+#
+#   CHANNEL RACK (Send B) - three levels, MASTER SELECT steps through them (or press a Track Select pad 1/2/3):
+#     L1 CHANNELS: grid = 40 channels per bank (green = active, red = muted, blinking = selected). Pad = select, SHIFT+pad = mute.
+#        Cue Level scrolls the selection, bank LEFT/RIGHT = +/-8 channels, bank UP/DOWN = previous/next channel,
+#        Scene 1-5 = pattern length 8/16/32/64/128, Activator pad 1 = mute, Solo pad 1 = solo, SHIFT+Stop All = clear everything
+#     L2 STEP SEQUENCER: grid = 40 steps of the selected channel (green = on, orange blink = focused). Pad = toggle step + focus it,
+#        SHIFT+pad = focus it and open L3. Cue Level scrolls the focus. Clip Stop pad 1 = clear this channel's steps
+#     L3 NOTE PROPERTIES of the FOCUSED step (the graph-editor values):
+#        faders 1-8 = Pitch, Velocity, Release, Fine pitch, Pan, Mod X, Mod Y, Shift     master fader = Repeat
+#        track knobs 1-8 = the same 8 properties (rings show the real values), device knob 1 = Repeat
+#        NUDGE -/+ = Shift -/+ 1 tick (SHIFT held: 6).  Record/Arm pads 1-8 = reset that property to its default
+#        grid pad = focus that step (SHIFT+pad = toggle it on/off), Cue Level scrolls the focus
 #
 # Install: Documents\Image-Line\FL Studio\Settings\Hardware\APC40Control\device_APC40Control.py
 # Then Options > MIDI settings: Input APC40 -> controller type "APC40 MkI Control (Mixer + FX)", set the same port number on the
@@ -53,26 +57,32 @@ RING_MIN_DELTA = 2          # background ring sync ignores differences smaller t
 BLINK_SECONDS = 0.4
 SCAN_SECONDS = 0.25
 POLL_SECONDS = 0.10
+CUE_TICKS_PER_CHANNEL = 2
+AUTO_ACTIVATE_STEP = True   # writing a note property turns the step on first (FL needs an active step)
 
-# ---------------------------------------------------------------- Channel Rack mode config
-MODE_MIXER = "mixer"
-MODE_FX = "fx"
-MODE_CHANNELS = "channels"
-CR_VISIBLE_STEPS = 8        # steps visible per page (one row of 8 pads)
-CR_VISIBLE_CHANNELS = 5     # channels shown in rows 1-5
-CR_MAX_STEPS = 64           # max steps to scan (FL supports up to 512, but 64 is practical)
-CR_VELOCITY_MAX = 127
+MODE_MIXER, MODE_FX, MODE_CHANNELS = "mixer", "fx", "channels"
+CR_LEVEL_SELECT, CR_LEVEL_SEQ, CR_LEVEL_PROPS = 1, 2, 3
+CR_PATTERN_LENGTHS = [8, 16, 32, 64, 128]
+
+# FL step parameters (channels.setStepParameterByIndex / getCurrentStepParam), indices from the FL scripting manual.
+PROP_PITCH, PROP_VELOCITY, PROP_RELEASE, PROP_FINE, PROP_PAN, PROP_MODX, PROP_MODY, PROP_SHIFT, PROP_REPEAT = range(9)
+PROP_NAMES = ["Pitch", "Velocity", "Release", "Fine pitch", "Pan", "Mod X", "Mod Y", "Shift", "Repeat"]
+# (min, max, default).  Pitch/velocity/release/fine pitch/pan ranges are documented; Mod X/Y, Shift and Repeat are
+# UNVERIFIED guesses - entering Level 3 prints the real raw values of the focused step so they can be corrected here.
+PROP_RANGES = [(0, 127, 60), (0, 127, 100), (0, 127, 64), (0, 240, 120), (0, 127, 64),
+               (0, 255, 128), (0, 255, 128), (0, 127, 0), (0, 15, 0)]
 
 # ---------------------------------------------------------------- verified APC40 MkI map
 N_REC, N_SOLO, N_ACT, N_SEL, N_STOP = 48, 49, 50, 51, 52
 GRID_NOTES = [53, 54, 55, 56, 57]
 FX_ROW_NOTES = GRID_NOTES + [N_STOP, N_ACT, N_SOLO, N_REC, N_SEL]       # matrix row 0..9 -> note
 NOTE_TO_FX_ROW = dict((n, i) for i, n in enumerate(FX_ROW_NOTES))
-SCENE_NOTES = [82, 83, 84, 85, 86, 87, 88, 89]                          # 8 scene launch buttons
+SCENE_NOTES = [82, 83, 84, 85, 86]
 N_MASTER_SEL, N_STOP_ALL = 80, 81
 N_PAN, N_SEND_A, N_SEND_B, N_SEND_C = 87, 88, 89, 90
 N_BANK_UP, N_BANK_DOWN, N_BANK_RIGHT, N_BANK_LEFT = 94, 95, 96, 97
 N_SHIFT = 98
+N_NUDGE_PLUS, N_NUDGE_MINUS = 100, 101
 TRACK_KNOB_CC = list(range(48, 56))
 DEVICE_KNOB_CC = list(range(16, 24))
 CC_FADER, CC_MASTER, CC_CUE = 7, 14, 47
@@ -104,6 +114,13 @@ def send_midi(status, d1, d2):
 class App:
     def __init__(self):
         self.mode = MODE_MIXER
+        self.cr_level = CR_LEVEL_SELECT
+        self.cr_channel_base = 0
+        self.cr_sel_channel = 0
+        self.cr_focused_step = 0
+        self.cr_pattern_length = 32
+        self.cr_last_fl_channel = None
+        self.warned = set()
         self.base = 1                       # first FL mixer track shown in column 1 (track 0 is Master)
         self.sel_track, self.sel_slot = 1, 0
         self.bank = 0
@@ -123,10 +140,6 @@ class App:
         self.cat = {}                       # (track, slot) -> effect category 0/1/2
         self.focus_fn = None                # which FL call worked for opening a plugin window
         self.focus_warned = False
-        # Channel Rack mode state
-        self.cr_step_offset = 0             # which step page we're viewing (0, 8, 16, ...)
-        self.cr_view_mode = 0               # 0 = 5ch view, 1 = 8ch view
-        self.cr_selected_ch = 0             # cached selected channel for CR mode
 
     # ------------------------------------------------------------ output (diffed: only changes hit the USB port)
     def led(self, ch, note, vel):
@@ -145,7 +158,7 @@ class App:
     def hint(self, text):
         try:
             ui.setHintMsg(text)
-        except Exception:
+        except Exception:                                   # noqa: BLE001 - optional nicety
             pass
 
     # ------------------------------------------------------------ FL state helpers
@@ -155,7 +168,7 @@ class App:
     def slot_present(self, track, slot):
         try:
             return bool(plugins.isValid(track, slot))
-        except Exception:
+        except Exception:                                   # noqa: BLE001
             return False
 
     def scan_present(self):
@@ -177,7 +190,7 @@ class App:
     def category(track, slot):
         try:
             name = plugins.getPluginName(track, slot).lower()
-        except Exception:
+        except Exception:                                   # noqa: BLE001
             return 0
         for cat, words in CATEGORY_KEYWORDS:
             if any(w in name for w in words):
@@ -201,7 +214,7 @@ class App:
                     self.focus_fn = modname + "." + attr
                     print("APC40: plugin window focus via", self.focus_fn)
                 return
-            except Exception as e:
+            except Exception as e:                          # noqa: BLE001
                 print("APC40: %s.%s failed: %s" % (modname, attr, e))
         if not self.focus_warned:
             self.focus_warned = True
@@ -218,7 +231,7 @@ class App:
             try:
                 self.pname = plugins.getPluginName(self.sel_track, self.sel_slot)
                 self.pcount = plugins.getParamCount(self.sel_track, self.sel_slot)
-            except Exception:
+            except Exception:                               # noqa: BLE001
                 self.pname, self.pcount = "?", 0
         else:
             self.pname, self.pcount = "", 0
@@ -230,13 +243,13 @@ class App:
     def param_value(self, p):
         try:
             return float(plugins.getParamValue(p, self.sel_track, self.sel_slot))
-        except Exception:
+        except Exception:                                   # noqa: BLE001
             return None
 
     def set_param(self, p, v):
         try:
             plugins.setParamValue(float(v), p, self.sel_track, self.sel_slot)
-        except Exception as e:
+        except Exception as e:                              # noqa: BLE001
             print("APC40: param write error:", e)
 
     def select_track(self, track):
@@ -244,60 +257,11 @@ class App:
         self.last_fl_track = track
         try:
             mixer.setActiveTrack(track)
-        except Exception:
+        except Exception:                                   # noqa: BLE001
             try:
                 mixer.setTrackNumber(track)
-            except Exception as e:
+            except Exception as e:                          # noqa: BLE001
                 print("APC40: select track error:", e)
-
-    # ------------------------------------------------------------ FL channels helpers (Channel Rack mode)
-    def channel_count(self):
-        try:
-            return channels.channelCount()
-        except Exception:
-            return 0
-
-    def selected_channel(self):
-        try:
-            return channels.selectedChannel(0, 0, 1)
-        except Exception:
-            return 0
-
-    def grid_bit(self, ch, step):
-        try:
-            return bool(channels.getGridBit(ch, step))
-        except Exception:
-            return False
-
-    def set_grid_bit(self, ch, step, value):
-        try:
-            channels.setGridBit(ch, step, 1 if value else 0)
-        except Exception as e:
-            print("APC40: setGridBit error:", e)
-
-    def channel_muted(self, ch):
-        try:
-            return bool(channels.isChannelMuted(ch))
-        except Exception:
-            return False
-
-    def channel_solo(self, ch):
-        try:
-            return bool(channels.isChannelSolo(ch))
-        except Exception:
-            return False
-
-    def channel_armed(self, ch):
-        try:
-            return bool(channels.isChannelArmed(ch))
-        except Exception:
-            return False
-
-    def channel_name(self, ch):
-        try:
-            return channels.getChannelName(ch)
-        except Exception:
-            return "?"
 
     # ------------------------------------------------------------ rendering
     def render(self, force_rings=False):
@@ -323,10 +287,10 @@ class App:
                 note = FX_ROW_NOTES[row]
                 present = self.present.get((track, row), False)
                 selected = (track == self.sel_track and row == self.sel_slot)
-                if row < 5:
+                if row < 5:                                   # three-colour rows: colour = effect type, blink = selected
                     steady = CATEGORY_VEL[self.cat.get((track, row), 0)]
                     vel = (steady + 1 if present else LED_RED_BLINK) if selected else (steady if present else LED_OFF)
-                elif selected:
+                elif selected:                                # single-colour rows: blink the cursor
                     vel = 2 if row == 5 else (1 if self.blink_on else 0)
                 else:
                     vel = 1 if present else 0
@@ -343,79 +307,16 @@ class App:
                 want[(col, N_ACT)] = 0 if mixer.isTrackMuted(t) else 1
                 want[(col, N_SOLO)] = 1 if mixer.isTrackSolo(t) else 0
                 want[(col, N_REC)] = 1 if mixer.isTrackArmed(t) else 0
-            except Exception:
+            except Exception:                               # noqa: BLE001
                 pass
             want[(col, N_SEL)] = 1 if t == self.sel_track else 0
-
-    def render_channels(self, want):
-        """Channel Rack mode: 5 channels x 8 steps, plus channel controls on rows 6-10."""
-        ch_count = self.channel_count()
-        sel_ch = self.selected_channel()
-        step_base = self.cr_step_offset
-
-        # Rows 1-5: step sequencer grid (5 channels x 8 steps)
-        for row in range(CR_VISIBLE_CHANNELS):
-            if row >= ch_count:
-                continue
-            note = GRID_NOTES[row]
-            for col in range(NUM_COLS):
-                step = step_base + col
-                if step >= CR_MAX_STEPS:
-                    want[(col, note)] = 0
-                    continue
-                bit = self.grid_bit(row, step)
-                if row == sel_ch:
-                    # Selected channel: bright blink for active steps
-                    want[(col, note)] = 2 if (bit and self.blink_on) else (1 if bit else 0)
-                else:
-                    want[(col, note)] = 1 if bit else 0
-
-        # Row 6 (Clip Stop): channel select
-        for col in range(NUM_COLS):
-            if col < ch_count:
-                want[(col, N_STOP)] = 1 if col == sel_ch else 0
-
-        # Row 7 (Activator): mute
-        for col in range(NUM_COLS):
-            if col < ch_count:
-                want[(col, N_ACT)] = 0 if self.channel_muted(col) else 1
-
-        # Row 8 (Solo): solo
-        for col in range(NUM_COLS):
-            if col < ch_count:
-                want[(col, N_SOLO)] = 1 if self.channel_solo(col) else 0
-
-        # Row 9 (Record Arm): arm
-        for col in range(NUM_COLS):
-            if col < ch_count:
-                want[(col, N_REC)] = 1 if self.channel_armed(col) else 0
-
-        # Row 10 (Track Select): step page jump indicators
-        current_page = step_base // CR_VISIBLE_STEPS
-        for col in range(NUM_COLS):
-            want[(col, N_SEL)] = 1 if col == current_page else 0
-
-        # Scene buttons show CR-specific state
-        want[(0, SCENE_NOTES[0])] = 1  # Fill 2
-        want[(0, SCENE_NOTES[1])] = 1  # Fill 4
-        want[(0, SCENE_NOTES[2])] = 1  # Fill 8
-        want[(0, SCENE_NOTES[3])] = 1  # Rotate L
-        want[(0, SCENE_NOTES[4])] = 1  # Rotate R
-        want[(0, SCENE_NOTES[5])] = 1  # Clone
-        want[(0, SCENE_NOTES[6])] = 1  # Clear
-        want[(0, SCENE_NOTES[7])] = 1  # Toggle view
 
     def render_ring_types(self):
         fx = self.mode == MODE_FX
         cr = self.mode == MODE_CHANNELS
         for i in range(8):
-            if cr:
-                # Channel Rack: track knobs = velocity (RING_VOLUME style), device knobs = velocity
-                self.ring_type(RING_TYPE_TRACK[i], RING_VOLUME)
-                self.ring_type(RING_TYPE_DEVICE[i], RING_VOLUME)
-            else:
-                self.ring_type(RING_TYPE_TRACK[i], RING_VOLUME if fx else RING_PAN)
-                self.ring_type(RING_TYPE_DEVICE[i], RING_VOLUME if fx else RING_OFF)
+            self.ring_type(RING_TYPE_TRACK[i], RING_VOLUME if (fx or cr) else RING_PAN)
+            self.ring_type(RING_TYPE_DEVICE[i], RING_VOLUME if (fx or cr) else RING_OFF)
 
     def ring_type(self, cc, value):
         key = ("type", cc)
@@ -425,11 +326,11 @@ class App:
 
     def sync_rings(self, force=False):
         now = self.clock()
-        if self.mode == MODE_FX:
+        if self.mode == "fx":
             for k in range(16):
                 cc = TRACK_KNOB_CC[k] if k < 8 else DEVICE_KNOB_CC[k - 8]
                 if not force and now - self.touched.get(cc, -99.0) < TOUCH_HOLD_SECONDS:
-                    continue
+                    continue                                # the user is turning this knob: do not fight them
                 p = self.bank * BANK_SIZE + k
                 v = self.param_value(p) if (self.sel_present() and p < self.pcount) else 0.0
                 target = int(round(max(0.0, min(1.0, v or 0.0)) * 127))
@@ -437,46 +338,23 @@ class App:
                     continue
                 self.ring(cc, target)
         elif self.mode == MODE_CHANNELS:
-            # Channel Rack: rings show velocity for the selected channel's steps
-            sel_ch = self.selected_channel()
-            for k in range(8):
-                cc = TRACK_KNOB_CC[k]
-                if not force and now - self.touched.get(cc, -99.0) < TOUCH_HOLD_SECONDS:
-                    continue
-                # Try to read step velocity if the API supports it
-                step = self.cr_step_offset + k
-                vel = self.get_step_velocity(sel_ch, step)
-                self.ring(cc, vel if vel is not None else 0)
-                cc2 = DEVICE_KNOB_CC[k]
-                if not force and now - self.touched.get(cc2, -99.0) < TOUCH_HOLD_SECONDS:
-                    continue
-                step2 = self.cr_step_offset + 8 + k
-                vel2 = self.get_step_velocity(sel_ch, step2)
-                self.ring(cc2, vel2 if vel2 is not None else 0)
+            props = self.cr_level == CR_LEVEL_PROPS
+            for i in range(8):                              # track knob rings = the 8 properties of the focused note
+                v = self.step_norm(self.cr_sel_channel, self.cr_focused_step, i) if props else 0.0
+                self.ring_to(TRACK_KNOB_CC[i], v, force, now)
+            for i in range(8):                              # device knob 1 ring = Repeat, the rest are unused
+                v = self.step_norm(self.cr_sel_channel, self.cr_focused_step, PROP_REPEAT) if (props and i == 0) else 0.0
+                self.ring_to(DEVICE_KNOB_CC[i], v, force, now)
         else:
             for i in range(8):
                 if not force and now - self.touched.get(TRACK_KNOB_CC[i], -99.0) < TOUCH_HOLD_SECONDS:
                     continue
                 try:
                     pan = mixer.getTrackPan(self.track_of(i))
-                except Exception:
+                except Exception:                           # noqa: BLE001
                     pan = 0.0
                 self.ring(TRACK_KNOB_CC[i], (pan + 1.0) * 63.5)
                 self.ring(DEVICE_KNOB_CC[i], 0)
-
-    def get_step_velocity(self, ch, step):
-        """Try to read step velocity. Returns 0-127 or None if unsupported."""
-        try:
-            # Try various API names that may exist in different FL builds
-            if hasattr(channels, "getStepVelocity"):
-                v = channels.getStepVelocity(ch, step)
-                return int(round(v * 127)) if v is not None else None
-            if hasattr(channels, "getGridBitValue"):
-                v = channels.getGridBitValue(ch, step)
-                return int(round(v * 127)) if v is not None else None
-        except Exception:
-            pass
-        return None
 
     def rearm_faders(self):
         self.fader_armed = [False] * 9
@@ -496,7 +374,7 @@ class App:
             self.shift = down
             if not down and self.fine:
                 self.fine.clear()
-                self.sync_rings(True)
+                self.sync_rings(True)                       # knobs go back to showing the true parameter values
             return
         if not down:
             return
@@ -506,17 +384,12 @@ class App:
             return self.set_mode(MODE_FX)
         if note == N_SEND_B:
             return self.set_mode(MODE_CHANNELS)
-        if note == N_SEND_C:
-            self.hint("Send C: Playlist mode (not yet implemented)")
-            return
-        if note == N_MASTER_SEL and self.shift:
-            # Cycle through modes
-            if self.mode == MODE_MIXER:
-                return self.set_mode(MODE_FX)
-            elif self.mode == MODE_FX:
-                return self.set_mode(MODE_CHANNELS)
-            else:
-                return self.set_mode(MODE_MIXER)
+        if note == N_MASTER_SEL:
+            if self.shift:
+                return self.set_mode({MODE_MIXER: MODE_FX, MODE_FX: MODE_CHANNELS, MODE_CHANNELS: MODE_MIXER}[self.mode])
+            if self.mode == MODE_CHANNELS:
+                return self.cr_next_level()
+            return None
         if note in (N_BANK_LEFT, N_BANK_RIGHT):
             return self.shift_tracks(-NUM_COLS if note == N_BANK_LEFT else NUM_COLS)
         if self.mode == MODE_CHANNELS:
@@ -530,25 +403,26 @@ class App:
         if mode == self.mode:
             return
         self.mode = mode
+        self.cue_accum = 0                                  # leftover Cue Level ticks must not leak into the new mode
         self.rearm_faders()
-        self.led_sent.clear()
+        self.led_sent.clear()                               # force a full, clean repaint of the surface
         self.scan_present()
         self.refresh_selected()
         if mode == MODE_CHANNELS:
-            self.cr_step_offset = 0
-            self.cr_selected_ch = self.selected_channel()
+            self.cr_sel_channel = self.selected_channel()
+            self.cr_last_fl_channel = self.cr_sel_channel
+            self.cr_channel_base = (self.cr_sel_channel // 40) * 40
+            self.cr_level = CR_LEVEL_SELECT
+            self.cr_focused_step = 0
         self.render(True)
-        self.hint("Mode: %s" % mode.upper())
 
     def shift_tracks(self, delta):
         if self.mode == MODE_CHANNELS:
-            # In Channel Rack mode, bank left/right scrolls step pages
-            new_offset = self.cr_step_offset + (delta // NUM_COLS) * CR_VISIBLE_STEPS
-            new_offset = max(0, min(CR_MAX_STEPS - CR_VISIBLE_STEPS, new_offset))
-            if new_offset != self.cr_step_offset:
-                self.cr_step_offset = new_offset
-                self.hint("Step page: %d" % (self.cr_step_offset // CR_VISIBLE_STEPS + 1))
-                self.render(True)
+            if self.cr_level == CR_LEVEL_SELECT:
+                self.cr_channel_base = max(0, min(max(0, self.channel_count() - 1), self.cr_channel_base + delta))
+            else:
+                self.cr_focus(self.cr_focused_step + delta // 2)
+            self.render(True)
             return
         self.base = max(1, self.base + delta)
         self.rearm_faders()
@@ -587,166 +461,6 @@ class App:
             return
         self.render(True)
 
-    # ------------------------------------------------------------ Channel Rack mode handlers
-    def channels_button(self, ch, note):
-        """Handle Channel Rack mode button presses with full 10-row grid."""
-        ch_count = self.channel_count()
-        sel_ch = self.selected_channel()
-
-        # Rows 1-5: step toggling
-        if note in NOTE_TO_FX_ROW:
-            row = NOTE_TO_FX_ROW[note]
-            if row < CR_VISIBLE_CHANNELS and ch < NUM_COLS:
-                step = self.cr_step_offset + ch
-                if row < ch_count and step < CR_MAX_STEPS:
-                    bit = self.grid_bit(row, step)
-                    self.set_grid_bit(row, step, 0 if bit else 1)
-                    if row != sel_ch:
-                        try:
-                            channels.selectOneChannel(row)
-                        except Exception:
-                            pass
-                self.render()
-            return
-
-        # Row 6 (Clip Stop): select channel
-        if note == N_STOP and ch < NUM_COLS:
-            if ch < ch_count:
-                try:
-                    channels.selectOneChannel(ch)
-                except Exception:
-                    pass
-                self.hint("Channel %d: %s" % (ch, self.channel_name(ch)))
-            self.render()
-            return
-
-        # Row 7 (Activator): mute
-        if note == N_ACT and ch < NUM_COLS:
-            if ch < ch_count:
-                try:
-                    channels.muteChannel(ch, not self.channel_muted(ch))
-                except Exception:
-                    pass
-            self.render()
-            return
-
-        # Row 8 (Solo): solo
-        if note == N_SOLO and ch < NUM_COLS:
-            if ch < ch_count:
-                try:
-                    channels.soloChannel(ch, not self.channel_solo(ch))
-                except Exception:
-                    pass
-            self.render()
-            return
-
-        # Row 9 (Record Arm): arm
-        if note == N_REC and ch < NUM_COLS:
-            if ch < ch_count:
-                try:
-                    channels.armChannel(ch, not self.channel_armed(ch))
-                except Exception:
-                    pass
-            self.render()
-            return
-
-        # Row 10 (Track Select): step page jump
-        if note == N_SEL and ch < NUM_COLS:
-            self.cr_step_offset = min(ch * CR_VISIBLE_STEPS, CR_MAX_STEPS - CR_VISIBLE_STEPS)
-            self.hint("Step page: %d" % (self.cr_step_offset // CR_VISIBLE_STEPS + 1))
-            self.render(True)
-            return
-
-        # Stop All: clear all steps in pattern
-        if note == N_STOP_ALL:
-            for c in range(ch_count):
-                for step in range(CR_MAX_STEPS):
-                    self.set_grid_bit(c, step, 0)
-            self.hint("Cleared all steps")
-            self.render()
-            return
-
-        # Bank Up/Down: scroll channels in CR mode
-        if note in (N_BANK_UP, N_BANK_DOWN):
-            sel = self.selected_channel() + (-1 if note == N_BANK_UP else 1)
-            if 0 <= sel < ch_count:
-                try:
-                    channels.selectOneChannel(sel)
-                except Exception:
-                    pass
-                self.hint("Channel %d: %s" % (sel, self.channel_name(sel)))
-            self.render()
-            return
-
-        # Scene Launch buttons: scripted operations
-        if note == SCENE_NOTES[0]:
-            self.cr_fill_each(2)
-        elif note == SCENE_NOTES[1]:
-            self.cr_fill_each(4)
-        elif note == SCENE_NOTES[2]:
-            self.cr_fill_each(8)
-        elif note == SCENE_NOTES[3]:
-            self.cr_rotate(-1)
-        elif note == SCENE_NOTES[4]:
-            self.cr_rotate(+1)
-        elif note == SCENE_NOTES[5]:
-            self.cr_clone_loop()
-        elif note == SCENE_NOTES[6]:
-            self.cr_clear_selected()
-        elif note == SCENE_NOTES[7]:
-            self.cr_toggle_view()
-        else:
-            return
-        self.render(True)
-
-    def cr_fill_each(self, interval):
-        """Fill selected channel with steps at every `interval`."""
-        sel = self.selected_channel()
-        for step in range(CR_MAX_STEPS):
-            self.set_grid_bit(sel, step, 0)
-        for step in range(0, CR_MAX_STEPS, interval):
-            self.set_grid_bit(sel, step, 1)
-        self.hint("Filled every %d" % interval)
-        self.render()
-
-    def cr_rotate(self, direction):
-        """Rotate selected channel's step pattern left or right."""
-        sel = self.selected_channel()
-        # Use 16 steps as the rotation window
-        length = 16
-        bits = [self.grid_bit(sel, i) for i in range(length)]
-        if direction > 0:
-            bits = [bits[-1]] + bits[:-1]
-        else:
-            bits = bits[1:] + [bits[0]]
-        for i, v in enumerate(bits):
-            self.set_grid_bit(sel, i, v)
-        self.hint("Rotated %s" % ("right" if direction > 0 else "left"))
-        self.render()
-
-    def cr_clone_loop(self):
-        """Duplicate the first 16 steps of the selected channel to steps 17-32."""
-        sel = self.selected_channel()
-        for i in range(16):
-            bit = self.grid_bit(sel, i)
-            self.set_grid_bit(sel, 16 + i, bit)
-        self.hint("Cloned 16 steps to next page")
-        self.render()
-
-    def cr_clear_selected(self):
-        """Clear steps for the selected channel only."""
-        sel = self.selected_channel()
-        for step in range(CR_MAX_STEPS):
-            self.set_grid_bit(sel, step, 0)
-        self.hint("Cleared channel %d" % sel)
-        self.render()
-
-    def cr_toggle_view(self):
-        """Toggle between 5-channel and 8-channel step views."""
-        self.cr_view_mode = 1 - self.cr_view_mode
-        self.hint("View: %s" % ("5ch" if self.cr_view_mode == 0 else "8ch"))
-        self.render()
-
     def change_bank(self, delta):
         nb = max(0, min(self.max_bank(), self.bank + delta))
         if nb != self.bank:
@@ -763,7 +477,7 @@ class App:
         for p in range(min(self.pcount, 200)):
             try:
                 print("  %03d  %-36s %.4f" % (p, plugins.getParamName(p, self.sel_track, self.sel_slot), self.param_value(p) or 0.0))
-            except Exception:
+            except Exception:                               # noqa: BLE001
                 break
 
     def mixer_button(self, ch, note):
@@ -781,7 +495,7 @@ class App:
                 self.select_track(t)
             else:
                 return
-        except Exception as e:
+        except Exception as e:                              # noqa: BLE001
             print("APC40: mixer button error:", e)
         self.render()
 
@@ -798,32 +512,23 @@ class App:
             self.knob(8 + DEVICE_KNOB_CC.index(cc), value, cc)
 
     def cue(self, delta):
-        if self.mode == MODE_FX:
-            self.cue_accum += delta
-            while abs(self.cue_accum) >= CUE_TICKS_PER_BANK:
-                step = 1 if self.cue_accum > 0 else -1
-                self.cue_accum -= step * CUE_TICKS_PER_BANK
-                self.change_bank(step)
-            self.render()
-        elif self.mode == MODE_CHANNELS:
-            # In Channel Rack mode, CUE scrolls step pages
-            self.cue_accum += delta
-            while abs(self.cue_accum) >= CUE_TICKS_PER_BANK:
-                step = 1 if self.cue_accum > 0 else -1
-                self.cue_accum -= step * CUE_TICKS_PER_BANK
-                new_offset = self.cr_step_offset + step * CR_VISIBLE_STEPS
-                new_offset = max(0, min(CR_MAX_STEPS - CR_VISIBLE_STEPS, new_offset))
-                if new_offset != self.cr_step_offset:
-                    self.cr_step_offset = new_offset
-                    self.hint("Step page: %d" % (self.cr_step_offset // CR_VISIBLE_STEPS + 1))
-            self.render()
+        if self.mode == MODE_CHANNELS:
+            return self.cr_cue(delta)
+        if self.mode != "fx":
+            return
+        self.cue_accum += delta
+        while abs(self.cue_accum) >= CUE_TICKS_PER_BANK:
+            step = 1 if self.cue_accum > 0 else -1
+            self.cue_accum -= step * CUE_TICKS_PER_BANK
+            self.change_bank(step)
+        self.render()
 
-    def knob(self, k, value, cc):
+    def knob(self, k, value, cc):                          # k 0-7 track knobs, 8-15 device knobs
         self.touched[cc] = self.clock()
-        if self.mode == MODE_FX:
+        if self.mode == "fx":
             p = self.bank * BANK_SIZE + k
             if self.sel_present() and p < self.pcount:
-                if self.shift:
+                if self.shift:                             # fine adjust: move relative to where the knob/param were when SHIFT engaged
                     if cc not in self.fine:
                         self.fine[cc] = (value, self.param_value(p) or 0.0)
                     k0, p0 = self.fine[cc]
@@ -831,63 +536,35 @@ class App:
                 else:
                     self.set_param(p, value / 127.0)
                 if self.shift:
-                    self.cc_sent.pop(cc, None)
+                    self.cc_sent.pop(cc, None)             # fine mode: the knob no longer equals the parameter, resync on release
                 else:
-                    self.cc_sent[cc] = value
+                    self.cc_sent[cc] = value               # the ring already shows the value the knob just sent
                 try:
                     self.hint("%s  %s: %s" % (self.pname, plugins.getParamName(p, self.sel_track, self.sel_slot),
                                               plugins.getParamValueString(p, self.sel_track, self.sel_slot)))
-                except Exception:
+                except Exception:                           # noqa: BLE001
                     pass
         elif self.mode == MODE_CHANNELS:
-            # In Channel Rack mode, knobs edit step velocity
-            sel = self.selected_channel()
-            step = self.cr_step_offset + (k if k < 8 else (k - 8) + 8)
-            if step < CR_MAX_STEPS:
-                # Ensure the step is active
-                self.set_grid_bit(sel, step, 1)
-                # Try to set velocity via API
-                self.set_step_velocity(sel, step, value)
-                try:
-                    self.hint("Step %d vel: %d" % (step + 1, value))
-                except Exception:
-                    pass
-                self.cc_sent[cc] = value
+            self.cr_knob(k, value, cc)
         elif k < 8:
             try:
                 mixer.setTrackPan(self.track_of(k), value / 127.0 * 2.0 - 1.0)
-            except Exception as e:
+            except Exception as e:                          # noqa: BLE001
                 print("APC40: pan error:", e)
             self.cc_sent[cc] = value
 
-    def set_step_velocity(self, ch, step, value):
-        """Try to set step velocity. Tries multiple API names."""
-        try:
-            if hasattr(channels, "setStepVelocity"):
-                channels.setStepVelocity(ch, step, value / 127.0)
-                return True
-            if hasattr(channels, "setGridBitValue"):
-                channels.setGridBitValue(ch, step, value / 127.0)
-                return True
-        except Exception:
-            pass
-        return False
-
     def fader(self, idx, pos):
         prev, self.fader_pos[idx] = self.fader_pos[idx], pos
-        if idx == 8:
+        if self.mode == MODE_CHANNELS and self.cr_level == CR_LEVEL_PROPS:
+            prop = idx if idx < 8 else PROP_REPEAT           # faders 1-8 = properties 1-8, master fader = Repeat
+            getter = lambda: self.step_norm(self.cr_sel_channel, self.cr_focused_step, prop)
+            setter = lambda v: self.set_prop_norm(prop, v)
+        elif idx == 8:                                      # master fader: always the Master track volume
             getter = lambda: self.safe(mixer.getTrackVolume, 0)
             setter = lambda v: mixer.setTrackVolume(0, v)
         elif self.mode == MODE_CHANNELS:
-            # In Channel Rack mode, faders edit step pan (or volume if pan unsupported)
-            sel = self.selected_channel()
-            step = self.cr_step_offset + idx
-            if step >= CR_MAX_STEPS:
-                return
-            # For now, map faders to step velocity as a fallback
-            self.set_step_velocity(sel, step, int(pos * 127))
-            return
-        elif self.mode == MODE_FX:
+            return                                          # faders are only used by Level 3 of the Channel Rack
+        elif self.mode == "fx":
             p = self.bank * BANK_SIZE + 16 + idx
             if not self.sel_present() or p >= self.pcount:
                 return
@@ -897,7 +574,7 @@ class App:
             t = self.track_of(idx)
             getter = lambda: self.safe(mixer.getTrackVolume, t)
             setter = lambda v: mixer.setTrackVolume(t, v)
-        if not self.fader_armed[idx]:
+        if not self.fader_armed[idx]:                       # pickup: faders are not motorised, so never jump the target
             target = getter()
             if target is None:
                 return
@@ -907,17 +584,281 @@ class App:
             self.fader_armed[idx] = True
         try:
             setter(pos)
-        except Exception as e:
+        except Exception as e:                              # noqa: BLE001
             print("APC40: fader error:", e)
+
+    # ------------------------------------------------------------ Channel Rack: FL helpers
+    def warn_once(self, key, text):
+        if key not in self.warned:
+            self.warned.add(key)
+            print("APC40:", text)
+
+    def channel_count(self):
+        try:
+            return int(channels.channelCount())
+        except Exception:                                   # noqa: BLE001
+            return 0
+
+    def selected_channel(self):
+        try:
+            return int(channels.selectedChannel())
+        except Exception:                                   # noqa: BLE001
+            return 0
+
+    def grid_bit(self, ch, step):
+        try:
+            return bool(channels.getGridBit(ch, step))
+        except Exception:                                   # noqa: BLE001
+            return False
+
+    def set_grid_bit(self, ch, step, on):
+        try:
+            channels.setGridBit(ch, step, 1 if on else 0)
+        except Exception as e:                              # noqa: BLE001
+            self.warn_once("setGridBit", "setGridBit failed: %s" % e)
+
+    def channel_flag(self, fn_name, ch):
+        try:
+            return bool(getattr(channels, fn_name)(ch))
+        except Exception:                                   # noqa: BLE001
+            return False
+
+    def channel_name(self, ch):
+        try:
+            return channels.getChannelName(ch)
+        except Exception:                                   # noqa: BLE001
+            return "?"
+
+    def channel_toggle(self, fn_name, ch):
+        try:
+            getattr(channels, fn_name)(ch)                  # muteChannel / soloChannel toggle when no value is given
+        except Exception as e:                              # noqa: BLE001
+            self.warn_once(fn_name, "%s failed: %s" % (fn_name, e))
+
+    def pattern_number(self):
+        try:
+            return int(patterns.patternNumber())
+        except Exception:                                   # noqa: BLE001
+            return 0
+
+    # ------------------------------------------------------------ Channel Rack: note properties (graph editor values)
+    # Read:  channels.getCurrentStepParam(channelIndex, step, param)
+    # Write: channels.setStepParameterByIndex(channelIndex, patternNumber, step, param, value)
+    def step_raw(self, ch, step, prop):
+        try:
+            return int(channels.getCurrentStepParam(ch, step, prop))
+        except Exception as e:                              # noqa: BLE001
+            self.warn_once(("read", prop), "getCurrentStepParam failed for %s: %s" % (PROP_NAMES[prop], e))
+            return None
+
+    def step_norm(self, ch, step, prop):
+        raw = self.step_raw(ch, step, prop)
+        if raw is None:
+            return None
+        lo, hi, _ = PROP_RANGES[prop]
+        return max(0.0, min(1.0, (raw - lo) / float(hi - lo)))
+
+    def write_step_prop(self, ch, step, prop, raw):
+        lo, hi, _ = PROP_RANGES[prop]
+        raw = int(max(lo, min(hi, raw)))
+        try:
+            if AUTO_ACTIVATE_STEP and not self.grid_bit(ch, step):
+                self.set_grid_bit(ch, step, True)
+            channels.setStepParameterByIndex(ch, self.pattern_number(), step, prop, raw)
+            return raw
+        except Exception as e:                              # noqa: BLE001
+            self.warn_once(("write", prop), "setStepParameterByIndex failed for %s: %s" % (PROP_NAMES[prop], e))
+            return None
+
+    def set_prop_norm(self, prop, v):
+        lo, hi, _ = PROP_RANGES[prop]
+        raw = self.write_step_prop(self.cr_sel_channel, self.cr_focused_step, prop, int(round(lo + v * (hi - lo))))
+        if raw is not None:
+            self.hint("Step %d  %s: %d" % (self.cr_focused_step + 1, PROP_NAMES[prop], raw))
+
+    def reset_prop(self, prop):
+        raw = self.write_step_prop(self.cr_sel_channel, self.cr_focused_step, prop, PROP_RANGES[prop][2])
+        if raw is not None:
+            self.hint("Step %d  %s reset to %d" % (self.cr_focused_step + 1, PROP_NAMES[prop], raw))
+        self.rearm_faders()
+
+    def nudge_shift(self, delta):
+        cur = self.step_raw(self.cr_sel_channel, self.cr_focused_step, PROP_SHIFT) or 0
+        raw = self.write_step_prop(self.cr_sel_channel, self.cr_focused_step, PROP_SHIFT, cur + delta)
+        if raw is not None:
+            self.hint("Step %d  Shift: %d" % (self.cr_focused_step + 1, raw))
+
+    def dump_step(self):
+        vals = []
+        for prop in range(len(PROP_NAMES)):
+            vals.append("%s=%s" % (PROP_NAMES[prop], self.step_raw(self.cr_sel_channel, self.cr_focused_step, prop)))
+        print("APC40: channel %d step %d raw properties: %s" % (self.cr_sel_channel, self.cr_focused_step + 1, "  ".join(vals)))
+
+    def ring_to(self, cc, norm, force, now):
+        if not force and now - self.touched.get(cc, -99.0) < TOUCH_HOLD_SECONDS:
+            return
+        target = int(round(max(0.0, min(1.0, norm or 0.0)) * 127))
+        if not force and abs(target - self.cc_sent.get(cc, -99)) < RING_MIN_DELTA:
+            return
+        self.ring(cc, target)
+
+    # ------------------------------------------------------------ Channel Rack: levels, rendering
+    def cr_set_level(self, level):
+        self.cr_level = level
+        self.rearm_faders()
+        self.hint({CR_LEVEL_SELECT: "Channel Rack: channels", CR_LEVEL_SEQ: "Channel Rack: step sequencer",
+                   CR_LEVEL_PROPS: "Channel Rack: note properties"}[level])
+        if level == CR_LEVEL_PROPS:
+            self.dump_step()
+        self.render(True)
+
+    def cr_next_level(self):
+        self.cr_set_level(self.cr_level % 3 + 1)
+
+    def cr_focus(self, step):
+        step = max(0, min(self.cr_pattern_length - 1, step))
+        if step != self.cr_focused_step:
+            self.cr_focused_step = step
+            self.rearm_faders()
+            self.hint("Step %d" % (step + 1))
+
+    def cr_select(self, idx):
+        self.cr_sel_channel = self.cr_last_fl_channel = idx
+        self.cr_channel_base = (idx // 40) * 40
+        try:
+            channels.selectOneChannel(idx)
+        except Exception as e:                              # noqa: BLE001
+            self.warn_once("selectOneChannel", "selectOneChannel failed: %s" % e)
+        self.hint("Channel %d: %s" % (idx + 1, self.channel_name(idx)))
+
+    def render_channels(self, want):
+        count, sel = self.channel_count(), self.cr_sel_channel
+        if self.cr_level == CR_LEVEL_SELECT:
+            for row in range(5):
+                for col in range(NUM_COLS):
+                    idx = self.cr_channel_base + row * NUM_COLS + col
+                    if idx >= count:
+                        vel = LED_OFF
+                    else:
+                        steady = LED_RED if self.channel_flag("isChannelMuted", idx) else LED_GREEN
+                        vel = steady + 1 if idx == sel else steady          # blink variant = steady + 1
+                    want[(col, GRID_NOTES[row])] = vel
+        else:
+            for row in range(5):
+                for col in range(NUM_COLS):
+                    step = row * NUM_COLS + col
+                    on = step < self.cr_pattern_length and sel < count and self.grid_bit(sel, step)
+                    if step >= self.cr_pattern_length or sel >= count:
+                        vel = LED_OFF
+                    elif step == self.cr_focused_step:
+                        vel = LED_ORANGE_BLINK if on else LED_RED_BLINK     # focused: orange = note on, red = note off
+                    else:
+                        vel = LED_GREEN if on else LED_OFF
+                    want[(col, GRID_NOTES[row])] = vel
+        want[(0, N_STOP)] = 1
+        for col in range(NUM_COLS):
+            want[(col, N_SEL)] = 1 if col == self.cr_level - 1 else 0         # level indicator
+            want[(col, N_REC)] = 1 if self.cr_level == CR_LEVEL_PROPS else 0  # reset-property pads
+        want[(0, N_ACT)] = 0 if self.channel_flag("isChannelMuted", sel) else 1
+        want[(0, N_SOLO)] = 1 if self.channel_flag("isChannelSolo", sel) else 0
+        for i, note in enumerate(SCENE_NOTES):
+            want[(0, note)] = 1 if CR_PATTERN_LENGTHS[i] == self.cr_pattern_length else 0
+
+    # ------------------------------------------------------------ Channel Rack: input
+    def channels_button(self, ch, note):
+        count, sel = self.channel_count(), self.cr_sel_channel
+        if note == N_STOP_ALL:
+            if self.shift:                                  # destructive, so it needs SHIFT
+                for c in range(count):
+                    for step in range(self.cr_pattern_length):
+                        self.set_grid_bit(c, step, False)
+                self.hint("Cleared every channel's steps")
+        elif note in (N_BANK_UP, N_BANK_DOWN):
+            self.cr_select(max(0, min(count - 1, sel + (-1 if note == N_BANK_UP else 1))))
+        elif note in (N_NUDGE_PLUS, N_NUDGE_MINUS):
+            if self.cr_level == CR_LEVEL_PROPS:
+                self.nudge_shift((6 if self.shift else 1) * (1 if note == N_NUDGE_PLUS else -1))
+        elif note in SCENE_NOTES:
+            self.cr_pattern_length = CR_PATTERN_LENGTHS[SCENE_NOTES.index(note)]
+            self.cr_focus(self.cr_focused_step)
+            self.hint("Pattern length: %d steps" % self.cr_pattern_length)
+        else:
+            row = NOTE_TO_FX_ROW.get(note)
+            if row is None or ch >= NUM_COLS:
+                return
+            if row < 5:
+                self.cr_grid_press(ch, row)
+            elif row == 5 and ch == 0:                      # clip stop pad 1: clear the selected channel
+                for step in range(self.cr_pattern_length):
+                    self.set_grid_bit(sel, step, False)
+                self.hint("Cleared channel %d" % (sel + 1))
+            elif row == 9 and ch < 3:                       # track select pads 1-3: jump to a level
+                self.cr_set_level(ch + 1)
+                return
+            elif row == 6 and ch == 0:                      # activator pad 1: mute selected channel
+                self.channel_toggle("muteChannel", sel)
+            elif row == 7 and ch == 0:                      # solo pad 1: solo selected channel
+                self.channel_toggle("soloChannel", sel)
+            elif row == 8 and self.cr_level == CR_LEVEL_PROPS and ch < 8:
+                self.reset_prop(ch)                         # record/arm pads: reset that property of the focused note
+        self.render(True)
+
+    def cr_grid_press(self, col, row):
+        count = self.channel_count()
+        if self.cr_level == CR_LEVEL_SELECT:
+            idx = self.cr_channel_base + row * NUM_COLS + col
+            if idx < count:
+                if self.shift:
+                    self.channel_toggle("muteChannel", idx)
+                else:
+                    self.cr_select(idx)
+            return
+        step = row * NUM_COLS + col
+        if step >= self.cr_pattern_length:
+            return
+        sel = self.cr_sel_channel
+        if self.cr_level == CR_LEVEL_SEQ:
+            if self.shift:
+                self.cr_focus(step)
+                self.cr_set_level(CR_LEVEL_PROPS)
+            else:
+                self.set_grid_bit(sel, step, not self.grid_bit(sel, step))
+                self.cr_focus(step)
+        else:
+            if self.shift:
+                self.set_grid_bit(sel, step, not self.grid_bit(sel, step))
+            self.cr_focus(step)
+
+    def cr_knob(self, k, value, cc):
+        if self.cr_level != CR_LEVEL_PROPS:
+            return
+        prop = k if k < 8 else (PROP_REPEAT if k == 8 else None)    # track knobs 1-8 = properties 1-8, device knob 1 = Repeat
+        if prop is None:
+            return
+        self.set_prop_norm(prop, value / 127.0)
+        self.cc_sent[cc] = value
+
+    def cr_cue(self, delta):
+        self.cue_accum += delta
+        while abs(self.cue_accum) >= CUE_TICKS_PER_CHANNEL:
+            step = 1 if self.cue_accum > 0 else -1
+            self.cue_accum -= step * CUE_TICKS_PER_CHANNEL
+            if self.cr_level == CR_LEVEL_SELECT:
+                new = max(0, min(self.channel_count() - 1, self.cr_sel_channel + step))
+                if new != self.cr_sel_channel:
+                    self.cr_select(new)
+            else:
+                self.cr_focus(self.cr_focused_step + step)
+        self.render(self.cr_level == CR_LEVEL_PROPS)
 
     @staticmethod
     def safe(fn, *args):
         try:
             return float(fn(*args))
-        except Exception:
+        except Exception:                                   # noqa: BLE001
             return None
 
-    # ------------------------------------------------------------ periodic work
+    # ------------------------------------------------------------ periodic work (called from OnIdle)
     def tick(self, now):
         redraw = False
         if now - self.t_blink >= BLINK_SECONDS:
@@ -928,28 +869,27 @@ class App:
             if self.scan_present():
                 self.refresh_selected()
                 redraw = True
-            if self.mode == MODE_CHANNELS:
-                # Detect if user changed channel selection in FL
+            if self.mode == MODE_CHANNELS:                  # follow channel selection made inside FL itself
                 cur = self.selected_channel()
-                if cur != self.cr_selected_ch:
-                    self.cr_selected_ch = cur
-                    redraw = True
+                if cur != self.cr_last_fl_channel:
+                    self.cr_last_fl_channel = cur
+                    if cur != self.cr_sel_channel:
+                        self.cr_sel_channel, self.cr_channel_base = cur, (cur // 40) * 40
+                        redraw = True
             tn = self.safe(mixer.trackNumber)
             if tn is not None:
                 tn = int(tn)
-                if tn != self.last_fl_track:
+                if tn != self.last_fl_track:                # FL's own selection changed: follow it if it is one of our columns
                     self.last_fl_track = tn
-                    if self.mode != MODE_CHANNELS and self.base <= tn < self.base + NUM_COLS and tn != self.sel_track:
+                    if self.base <= tn < self.base + NUM_COLS and tn != self.sel_track:
                         self.sel_track = tn
                         self.refresh_selected()
                         redraw = True
-            if self.mode == MODE_MIXER:
+            if self.mode == "mixer":
                 redraw = True
         if now - self.t_poll >= POLL_SECONDS:
             self.t_poll = now
-            if self.mode == MODE_FX:
-                self.sync_rings()
-            elif self.mode == MODE_CHANNELS:
+            if self.mode in (MODE_FX, MODE_CHANNELS):
                 self.sync_rings()
         if redraw:
             self.render()
@@ -960,9 +900,12 @@ class App:
         self.scan_present()
         self.last_fl_track = self.safe(mixer.trackNumber)
         self.refresh_selected()
-        self.cr_selected_ch = self.selected_channel()
+        self.cr_sel_channel = self.cr_last_fl_channel = self.selected_channel()
         self.render()
-        print("APC40 Control v0.2 ready: mode=%s, tracks %d-%d" % (self.mode, self.base, self.base + NUM_COLS - 1))
+        print("APC40 Control v0.7 ready: mode=%s, tracks %d-%d" % (self.mode, self.base, self.base + NUM_COLS - 1))
+        print("APC40: step API:", ", ".join("%s=%s" % (n, "yes" if hasattr(channels, n) else "NO")
+                                           for n in ("setStepParameterByIndex", "getCurrentStepParam", "getStepParam")),
+              "| patterns.patternNumber=%s" % ("yes" if hasattr(patterns, "patternNumber") else "NO"))
 
     def shutdown(self):
         for ch, note in ALL_LED_KEYS:
@@ -986,7 +929,7 @@ def OnDeInit():
 def OnMidiMsg(event):
     if _app is not None:
         _app.on_midi(event.status, event.data1, event.data2)
-    event.handled = True
+    event.handled = True                                    # never let FL turn APC40 pads into notes
 
 
 def OnIdle():
@@ -996,4 +939,4 @@ def OnIdle():
 
 def OnRefresh(flags):
     if _app is not None:
-        _app.t_scan = 0.0
+        _app.t_scan = 0.0                                   # re-scan slots / FL selection on the next idle tick
