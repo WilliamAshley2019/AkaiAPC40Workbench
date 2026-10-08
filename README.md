@@ -11,7 +11,7 @@ in send B mode it is channel rack interface top level is channel rack pads to ch
 if you press the pad then press master it goes to channel sequencer mode you then can place notes to your heart content
 the scene launch buttons are channel length that is active per page
 
-
+shift + pad  mute or unmutes that. 
  
 # APC40 Workbench (v0.2)
 App can be downloaded for windows here
